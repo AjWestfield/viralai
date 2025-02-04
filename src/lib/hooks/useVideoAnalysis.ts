@@ -1,7 +1,20 @@
 import { useState, useEffect } from 'react';
 import { VideoAnalysis, ProcessingStatus } from '../types/video';
+import { MediaCitation } from '../services/media-enricher';
 
-export function useVideoAnalysis() {
+interface UseVideoAnalysisReturn {
+  analysis: VideoAnalysis | null;
+  status: ProcessingStatus;
+  streamedAnalysis: {
+    reasoning: string;
+    citations: MediaCitation[];
+    displayedSteps: Set<string>;
+  };
+  analyzeVideo: (file: File) => Promise<VideoAnalysis | null>;
+  resetAnalysis: () => void;
+}
+
+export function useVideoAnalysis(): UseVideoAnalysisReturn {
   const [analysis, setAnalysis] = useState<VideoAnalysis | null>(null);
   const [status, setStatus] = useState<ProcessingStatus>({
     stage: 'uploading',
@@ -10,13 +23,15 @@ export function useVideoAnalysis() {
   });
   const [streamedAnalysis, setStreamedAnalysis] = useState<{
     reasoning: string;
-    citations: { url: string; title: string; }[];
+    citations: MediaCitation[];
+    displayedSteps: Set<string>;
   }>({
     reasoning: '',
-    citations: []
+    citations: [],
+    displayedSteps: new Set()
   });
 
-  const analyzeVideo = async (file: File) => {
+  const analyzeVideo = async (file: File): Promise<VideoAnalysis | null> => {
     let uploadInterval: NodeJS.Timeout;
 
     try {
@@ -24,7 +39,8 @@ export function useVideoAnalysis() {
       setAnalysis(null);
       setStreamedAnalysis({ 
         reasoning: '', 
-        citations: [] 
+        citations: [],
+        displayedSteps: new Set()
       });
       setStatus({ 
         stage: 'uploading', 
@@ -37,60 +53,103 @@ export function useVideoAnalysis() {
 
       // Start showing initial analysis steps
       let uploadProgress = 0;
-      let lastStep = -1; // Track the last shown step
+      let lastUpdate = Date.now();
       
       uploadInterval = setInterval(() => {
-        if (uploadProgress < 98) {
-          // Slower, more natural progress increments
-          uploadProgress += Math.random() * 2 + 1;
-          if (uploadProgress > 98) uploadProgress = 98;
-          
-          // Adjust step thresholds for more natural progression
-          const currentStep = Math.floor(uploadProgress / 16); // Adjusted for 6 steps
-          
-          if (currentStep > lastStep) {
-            lastStep = currentStep;
-            let newReasoning = '';
+        const now = Date.now();
+        const timeDiff = now - lastUpdate;
+        
+        // Calculate progress based on time elapsed
+        if (uploadProgress < 30) {
+          // Initial upload phase - faster progress
+          uploadProgress += (timeDiff / 1000) * 5; // 5% per second
+        } else if (uploadProgress < 60) {
+          // Processing phase - slower progress
+          uploadProgress += (timeDiff / 1000) * 2; // 2% per second
+        } else if (uploadProgress < 85) {
+          // Analysis phase - even slower progress
+          uploadProgress += (timeDiff / 1000) * 1; // 1% per second
+        }
+        
+        // Cap progress at 85% until we get actual completion
+        if (uploadProgress > 85) uploadProgress = 85;
+        
+        // Update last update time
+        lastUpdate = now;
+
+        // Update status with appropriate step message
+        let currentStep = 'Uploading video...';
+        if (uploadProgress > 30) currentStep = 'Processing video metadata...';
+        if (uploadProgress > 60) currentStep = 'Analyzing content...';
+        if (uploadProgress > 80) currentStep = 'Finalizing analysis...';
+
+        setStatus({
+          stage: uploadProgress >= 60 ? 'analyzing' : 'uploading',
+          progress: Math.round(uploadProgress),
+          currentStep
+        });
+
+        // Add analysis steps as progress increases, checking for duplicates
+        const addStep = (step: string, message: string) => {
+          setStreamedAnalysis(prev => {
+            // If step already exists, don't add it again
+            if (prev.displayedSteps.has(step)) {
+              return prev;
+            }
             
-            // Add delays between steps
-            setTimeout(() => {
-              switch(currentStep) {
-                case 0:
-                  newReasoning = 'Starting video analysis...\n';
-                  break;
-                case 1:
-                  newReasoning = 'Analyzing video format and container type...\n';
-                  break;
-                case 2:
-                  newReasoning = 'Checking video dimensions and aspect ratio...\n';
-                  break;
-                case 3:
-                  newReasoning = 'Evaluating frame rate and motion quality...\n';
-                  break;
-                case 4:
-                  newReasoning = 'Assessing audio configuration...\n';
-                  break;
-                case 5:
-                  newReasoning = 'Finalizing Analysis Results...\n';
-                  break;
+            // Get current lines and mark the previous step as complete
+            const lines = prev.reasoning.split('\n').filter(line => line.trim() !== '');
+            const updatedLines = lines.map((line, index) => {
+              // Only add checkmark to the previous step when adding a new one
+              if (index === lines.length - 1 && line.includes('...') && !line.includes('✓')) {
+                return line + ' ✓';
               }
+              return line;
+            });
+            
+            // Add the new step
+            return {
+              ...prev,
+              reasoning: [...updatedLines, message].join('\n') + '\n',
+              displayedSteps: new Set([...prev.displayedSteps, step])
+            };
+          });
+        };
 
-              if (newReasoning) {
-                setStreamedAnalysis(prev => ({
-                  ...prev,
-                  reasoning: prev.reasoning + newReasoning
-                }));
+        // Add steps sequentially based on progress
+        if (uploadProgress > 30 && !streamedAnalysis.displayedSteps.has('format')) {
+          addStep('format', 'Analyzing video format and technical specifications...');
+        }
+        if (uploadProgress > 42 && !streamedAnalysis.displayedSteps.has('content')) {
+          addStep('content', 'Evaluating content characteristics and engagement potential...');
+        }
+        if (uploadProgress > 55 && !streamedAnalysis.displayedSteps.has('comparison')) {
+          addStep('comparison', 'Comparing with similar content and viral patterns...');
+        }
+        if (uploadProgress > 70 && !streamedAnalysis.displayedSteps.has('score')) {
+          addStep('score', 'Calculating viral potential score...');
+        }
+        if (uploadProgress > 82 && !streamedAnalysis.displayedSteps.has('finalizing')) {
+          addStep('finalizing', 'Finalizing Analysis Results...');
+        }
+        
+        // Mark the final step as complete when reaching 85%
+        if (uploadProgress > 85) {
+          setStreamedAnalysis(prev => {
+            const lines = prev.reasoning.split('\n').filter(line => line.trim() !== '');
+            const updatedLines = lines.map((line, index) => {
+              if (index === lines.length - 1 && line.includes('...') && !line.includes('✓')) {
+                return line + ' ✓';
               }
-            }, Math.random() * 1000 + 500); // Random delay between 500-1500ms
-          }
-
-          setStatus({ 
-            stage: 'uploading', 
-            progress: Math.round(uploadProgress),
-            currentStep: 'Uploading and analyzing video...'
+              return line;
+            });
+            return {
+              ...prev,
+              reasoning: updatedLines.join('\n') + '\n'
+            };
           });
         }
-      }, 400);
+      }, 200); // Update every 200ms for smooth progress
 
       // Make the API request with streaming enabled
       console.log('Starting video upload...');
@@ -111,13 +170,11 @@ export function useVideoAnalysis() {
       // Set up streaming response handling
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
-      let analysisProgress = 90;
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
           
-          // When streaming is complete, show 100%
           if (done) {
             setStatus({ 
               stage: 'complete', 
@@ -132,52 +189,43 @@ export function useVideoAnalysis() {
           try {
             const data = JSON.parse(chunk);
             
-            // Update progress and status during streaming
+            // Update progress based on actual analysis progress
             if (data.progress) {
-              analysisProgress = Math.min(98, 90 + (data.progress * 0.2));
               setStatus({
                 stage: 'analyzing',
-                progress: Math.round(analysisProgress),
-                currentStep: 'Finalizing analysis results...'
+                progress: Math.min(99, 85 + (data.progress * 0.15)),
+                currentStep: data.currentStep || 'Processing analysis results...'
               });
             }
 
-            // Update streamed analysis if available
+            // Update streamed analysis if available, preventing duplicates
             if (data.reasoning || data.content || data.message?.content) {
               setStreamedAnalysis(prev => {
-                // Extract content from think tags if present
-                const thinkContent = data.content?.match(/<think>(.*?)<\/think>/s)?.[1]?.trim() || 
-                                   data.message?.content?.match(/<think>(.*?)<\/think>/s)?.[1]?.trim();
+                const newReasoning = data.reasoning || 
+                                   data.content || 
+                                   data.message?.content || '';
                 
-                // Get terminal output if available
-                const terminalOutput = data.message?.content || '';
-                
-                // Combine reasoning sources
-                const newReasoning = thinkContent || data.reasoning || terminalOutput || '';
+                // Only add the reasoning if it's not already present
+                const shouldAddReasoning = !prev.reasoning.includes(newReasoning);
                 
                 return {
-                  reasoning: prev.reasoning + (newReasoning ? newReasoning + '\n' : ''),
-                  citations: data.citations ? [
-                    ...prev.citations,
-                    ...data.citations.map((citation: any) => ({
-                      url: citation.url || citation,
-                      title: citation.title || citation.url?.split('/').pop()?.replace(/-/g, ' ') || citation
-                    }))
-                  ] : prev.citations
+                  ...prev,
+                  reasoning: shouldAddReasoning ? prev.reasoning + newReasoning + '\n' : prev.reasoning,
+                  citations: [...new Set([...prev.citations, ...(data.enrichedCitations || [])])],
+                  displayedSteps: prev.displayedSteps
                 };
               });
             }
 
             // If final result is received
             if (data.result) {
-              // Format the final analysis nicely
               const finalAnalysis = {
                 ...data,
                 reasoning: data.reasoning?.replace(/\n+/g, '\n').trim()
               };
               setAnalysis(finalAnalysis);
               
-              // Add delay before showing 100% completion
+              // Show completion with a slight delay
               setTimeout(() => {
                 setStatus({ 
                   stage: 'complete', 
@@ -195,7 +243,6 @@ export function useVideoAnalysis() {
       return analysis;
     } catch (error) {
       console.error('Video analysis error:', error);
-      // Clear intervals
       clearInterval(uploadInterval);
       
       setStatus({
@@ -210,7 +257,11 @@ export function useVideoAnalysis() {
 
   const resetAnalysis = () => {
     setAnalysis(null);
-    setStreamedAnalysis({ reasoning: '', citations: [] });
+    setStreamedAnalysis({ 
+      reasoning: '', 
+      citations: [],
+      displayedSteps: new Set()
+    });
     setStatus({ 
       stage: 'uploading', 
       progress: 0,
