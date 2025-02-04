@@ -137,26 +137,54 @@ export async function POST(request: NextRequest) {
         },
         status: {
           stage: 'complete',
-          progress: 100
+          progress: 100,
+          currentStep: 'Analysis complete!'
         },
         timestamp: new Date().toISOString(),
         reasoning: analysisResult.reasoning,
-        citations: analysisResult.citations
+        citations: analysisResult.citations,
+        enrichedCitations: analysisResult.enrichedCitations
       };
 
-      console.log('Sending successful response with reasoning and citations');
-      return NextResponse.json(response);
+      // Create a TransformStream to stream the response
+      const stream = new TransformStream();
+      const writer = stream.writable.getWriter();
+      const encoder = new TextEncoder();
+
+      // Write the response in chunks
+      const chunks = [
+        { progress: 95, currentStep: 'Processing analysis results...' },
+        { progress: 98, currentStep: 'Finalizing media citations...' },
+        { ...response, progress: 100, currentStep: 'Analysis complete!' }
+      ];
+
+      // Stream the chunks with delays
+      (async () => {
+        for (const chunk of chunks) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          await writer.write(encoder.encode(JSON.stringify(chunk) + '\n'));
+        }
+        await writer.close();
+      })();
+
+      return new Response(stream.readable, {
+        headers: {
+          'Content-Type': 'application/x-ndjson',
+          'Transfer-Encoding': 'chunked'
+        }
+      });
+
     } catch (error) {
-      console.error('Error analyzing video:', error);
+      console.error('Analysis error:', error);
       return NextResponse.json(
-        { error: 'Failed to analyze video content. Please try again.' },
+        { error: 'Failed to analyze video' },
         { status: 500 }
       );
     }
   } catch (error) {
-    console.error('Error processing video:', error);
+    console.error('Request error:', error);
     return NextResponse.json(
-      { error: 'Failed to process video upload. Please try again.' },
+      { error: 'Internal server error' },
       { status: 500 }
     );
   }

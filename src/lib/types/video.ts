@@ -1,3 +1,5 @@
+import { MediaCitation } from '../services/media-enricher';
+
 export interface VideoMetadata {
   duration: number;
   format: string;
@@ -28,6 +30,7 @@ export interface AnalysisResult {
 export interface ProcessingStatus {
   stage: 'uploading' | 'preprocessing' | 'analyzing' | 'complete';
   progress: number;
+  currentStep?: string;
   error?: string;
 }
 
@@ -38,4 +41,5 @@ export interface VideoAnalysis {
   timestamp: string;
   reasoning: string;
   citations: string[];
+  enrichedCitations: MediaCitation[];
 } 
