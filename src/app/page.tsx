@@ -9,7 +9,7 @@ import { useVideoAnalysis } from '@/lib/hooks/useVideoAnalysis';
 import { getScoreCategory, getScoreColor } from '@/lib/analysis/viralScore';
 
 export default function Home() {
-  const { analysis, status, analyzeVideo } = useVideoAnalysis();
+  const { analysis, status, streamedAnalysis, analyzeVideo } = useVideoAnalysis();
   const [error, setError] = useState<string | null>(null);
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -20,7 +20,9 @@ export default function Home() {
       setError(null);
       await analyzeVideo(file);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to analyze video');
+      const errorMessage = err instanceof Error ? err.message : 'Failed to analyze video';
+      setError(errorMessage);
+      console.error('Video analysis error:', err);
     }
   };
 
@@ -37,11 +39,21 @@ export default function Home() {
             <UploadZone 
               onFileSelect={handleFileUpload}
               status={status}
+              streamedAnalysis={streamedAnalysis}
               disabled={status.stage !== 'complete' && status.stage !== 'uploading'}
             />
             {error && (
-              <div className="text-red-500 text-sm mt-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
-                {error}
+              <div className="text-red-500 text-sm mt-2 p-4 rounded-lg bg-red-500/10 border border-red-500/20">
+                <div className="font-medium mb-1">Error analyzing video:</div>
+                <div className="text-red-400">{error}</div>
+                <div className="mt-2 text-xs text-red-400/80">
+                  Please ensure your video:
+                  <ul className="list-disc list-inside mt-1 space-y-1">
+                    <li>Is in MP4, MOV, or AVI format</li>
+                    <li>Is less than 100MB in size</li>
+                    <li>Is not corrupted or encrypted</li>
+                  </ul>
+                </div>
               </div>
             )}
           </div>
@@ -86,6 +98,31 @@ export default function Home() {
                     })}
                   </div>
                 </div>
+
+                {/* Analysis Reasoning */}
+                {analysis.reasoning && (
+                  <div className="border-t border-white/10 pt-4">
+                    <h3 className="text-lg font-semibold text-white mb-3">Analysis Reasoning</h3>
+                    <div className="text-white/80 text-sm space-y-2">
+                      <p>{analysis.reasoning}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Citations */}
+                {analysis.citations && analysis.citations.length > 0 && (
+                  <div className="border-t border-white/10 pt-4">
+                    <h3 className="text-lg font-semibold text-white mb-3">Analysis Sources</h3>
+                    <div className="space-y-2">
+                      {analysis.citations.map((citation, index) => (
+                        <div key={index} className="text-sm text-white/60 bg-white/5 p-2 rounded">
+                          {citation}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="border-t border-white/10 pt-4">
                   <h3 className="text-lg font-semibold text-white mb-3">Video Details</h3>
                   <div className="grid grid-cols-2 gap-3">
@@ -98,13 +135,13 @@ export default function Home() {
                     <div className="p-3 rounded-lg bg-white/5">
                       <span className="text-white/60 text-sm">Resolution</span>
                       <div className="text-white font-medium mt-1">
-                        {analysis.metadata.width}x{analysis.metadata.height}
+                        {analysis.metadata.video.width}x{analysis.metadata.video.height}
                       </div>
                     </div>
                     <div className="p-3 rounded-lg bg-white/5">
                       <span className="text-white/60 text-sm">FPS</span>
                       <div className="text-white font-medium mt-1">
-                        {analysis.metadata.fps}
+                        {analysis.metadata.video.fps}
                       </div>
                     </div>
                     <div className="p-3 rounded-lg bg-white/5">
