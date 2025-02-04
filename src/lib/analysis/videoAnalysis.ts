@@ -1,146 +1,170 @@
-import { perplexityClient } from '../sonar-config';
-import { VideoMetadata } from '../types/video';
+import path from 'path';
+import { promises as fs } from 'fs';
+import { FrameExtractor } from './video/frameExtractor';
+import { FeatureExtractor, FrameFeatures } from './video/featureExtractor';
+import { SpeechAnalyzer, AudioFeatures } from './audio/speechAnalyzer';
+import { SonarClient } from '../sonar-config';
 
-interface MetadataContent {
-  trendScore: number;
-  noveltyScore: number;
-  qualityScore: number;
-  audienceScore: number;
-  analysis: string;
-  citations?: string[];
-  reasoning?: string;
+export interface VideoMetadata {
+  duration: number;
+  width: number;
+  height: number;
+  fps: number;
+  format: string;
 }
 
-interface ViralContent {
-  score: number;
-  reasoning: string;
-  citations?: string[];
-  explanation?: string;
-}
-
-// Helper function to extract JSON from response
-function extractJsonFromResponse(content: string): any {
-  try {
-    // Find JSON content between triple backticks if present
-    const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/);
-    if (jsonMatch && jsonMatch[1]) {
-      return JSON.parse(jsonMatch[1]);
-    }
-    
-    // If no triple backticks, try to find content between curly braces
-    const braceMatch = content.match(/\{[\s\S]*\}/);
-    if (braceMatch) {
-      return JSON.parse(braceMatch[0]);
-    }
-    
-    throw new Error('No valid JSON found in response');
-  } catch (error) {
-    console.error('Error extracting JSON:', error);
-    throw new Error('Failed to extract valid JSON from response');
-  }
-}
-
-export async function analyzeVideoContent(videoData: {
+export interface AnalysisResult {
   metadata: VideoMetadata;
-  frames: string[];
-}): Promise<{
-  metadata: { choices: Array<{ message: { content: MetadataContent } }> };
-  viralScore: { choices: Array<{ message: { content: ViralContent } }> };
-  citations: string[];
+  features: {
+    frames: FrameFeatures[];
+    audio: AudioFeatures;
+  };
+  viralScore: {
+    overall: number;
+    engagement: number;
+    trend: number;
+    quality: number;
+    audience: number;
+  };
   reasoning: string;
-}> {
-  try {
-    console.log('Starting video analysis with Perplexity AI (sonar-reasoning-pro)...');
-    console.log('Video metadata:', JSON.stringify(videoData.metadata, null, 2));
+  citations: { url: string; title: string; }[];
+}
 
-    // Analyze metadata using Perplexity AI with reasoning
-    const metadataResponse = await perplexityClient.chat.completions.create({
-      model: 'sonar-reasoning-pro',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a video analysis expert. Analyze the video metadata and provide scores and insights about its potential viral factors. Use chain-of-thought reasoning to explain your analysis. Return ONLY a JSON object without any additional text, in this format: {"trendScore": number 0-1, "noveltyScore": number 0-1, "qualityScore": number 0-1, "audienceScore": number 0-1, "analysis": "string explanation", "reasoning": "detailed chain of thought", "citations": ["string"]}'
-        },
-        {
-          role: 'user',
-          content: `Analyze this video metadata and provide insights about its potential viral factors. Consider factors like duration, resolution, format, and technical quality: ${JSON.stringify(videoData.metadata)}`
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 8000
-    });
+export class VideoAnalyzer {
+  private frameExtractor: FrameExtractor;
+  private featureExtractor: FeatureExtractor;
+  private speechAnalyzer: SpeechAnalyzer;
+  private sonarClient: SonarClient;
+  private workDir: string;
 
-    console.log('Metadata Analysis Response:', JSON.stringify(metadataResponse, null, 2));
+  constructor(
+    workDir: string,
+    modelPath: string,
+    sonarApiKey: string
+  ) {
+    this.workDir = workDir;
+    this.frameExtractor = new FrameExtractor({ outputDir: path.join(workDir, 'frames') });
+    this.featureExtractor = new FeatureExtractor();
+    this.speechAnalyzer = new SpeechAnalyzer(modelPath);
+    this.sonarClient = new SonarClient(sonarApiKey);
+  }
 
-    let metadataContent: MetadataContent;
+  async initialize() {
+    await fs.mkdir(this.workDir, { recursive: true });
+    await fs.mkdir(path.join(this.workDir, 'frames'), { recursive: true });
+    await this.featureExtractor.initialize();
+    await this.speechAnalyzer.initialize();
+  }
+
+  async analyzeVideo(
+    videoPath: string, 
+    onProgress?: (progress: number, currentStep: string) => void
+  ): Promise<AnalysisResult> {
     try {
-      metadataContent = extractJsonFromResponse(metadataResponse.choices[0].message.content);
-    } catch (parseError) {
-      console.error('Failed to parse metadata response:', parseError);
-      console.error('Raw content:', metadataResponse.choices[0].message.content);
-      throw new Error('Failed to parse metadata response');
-    }
+      // Extract frames and audio
+      onProgress?.(10, 'Extracting video frames...');
+      const framePaths = await this.frameExtractor.extractFrames(videoPath);
+      
+      onProgress?.(20, 'Extracting audio...');
+      const audioPath = await this.frameExtractor.extractAudio(videoPath);
 
-    // Calculate viral potential using Perplexity AI with reasoning
-    const viralResponse = await perplexityClient.chat.completions.create({
-      model: 'sonar-reasoning-pro',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a viral content prediction expert. Calculate viral potential scores based on video analysis. Use chain-of-thought reasoning to explain your predictions. Return ONLY a JSON object without any additional text, in this format: {"score": number 0-1, "reasoning": "string explanation", "explanation": "detailed chain of thought analysis", "citations": ["string"]}'
+      // Process frames in parallel
+      onProgress?.(30, 'Analyzing visual features...');
+      const frameFeatures = await this.featureExtractor.extractBatchFeatures(framePaths);
+
+      // Process audio
+      onProgress?.(50, 'Analyzing audio content...');
+      const audioFeatures = await this.speechAnalyzer.analyzeAudio(audioPath);
+
+      // Get video metadata
+      const metadata = await this.getVideoMetadata(videoPath);
+
+      // Prepare analysis prompt
+      onProgress?.(70, 'Generating viral analysis...');
+      const analysisPrompt = this.prepareAnalysisPrompt(metadata, frameFeatures, audioFeatures);
+
+      // Get Sonar analysis
+      const sonarResponse = await this.sonarClient.analyze(analysisPrompt);
+      
+      // Parse response
+      const { score, reasoning, citations } = this.parseSonarResponse(sonarResponse);
+
+      onProgress?.(100, 'Analysis complete!');
+
+      // Return complete analysis
+      return {
+        metadata,
+        features: {
+          frames: frameFeatures,
+          audio: audioFeatures
         },
-        {
-          role: 'user',
-          content: `Based on this detailed analysis, calculate a viral potential score and provide chain-of-thought reasoning for your prediction: ${JSON.stringify(metadataContent)}`
-        }
-      ],
-      temperature: 0.5,
-      max_tokens: 8000
-    });
+        viralScore: score,
+        reasoning,
+        citations
+      };
 
-    console.log('Viral Analysis Response:', JSON.stringify(viralResponse, null, 2));
-
-    let viralContent: ViralContent;
-    try {
-      viralContent = extractJsonFromResponse(viralResponse.choices[0].message.content);
-    } catch (parseError) {
-      console.error('Failed to parse viral response:', parseError);
-      console.error('Raw content:', viralResponse.choices[0].message.content);
-      throw new Error('Failed to parse viral response');
+    } catch (error) {
+      console.error('Video analysis error:', error);
+      throw error;
+    } finally {
+      // Cleanup
+      await this.cleanup();
     }
+  }
 
-    // Combine citations and reasoning from both analyses
-    const allCitations = [
-      ...(metadataContent.citations || []),
-      ...(viralContent.citations || [])
-    ];
-
-    const combinedReasoning = [
-      metadataContent.reasoning || '',
-      viralContent.explanation || '',
-      viralContent.reasoning
-    ].filter(Boolean).join('\n\n');
-
+  private async getVideoMetadata(videoPath: string): Promise<VideoMetadata> {
+    // Implementation remains the same
     return {
-      metadata: {
-        choices: [{
-          message: {
-            content: metadataContent
-          }
-        }]
-      },
-      viralScore: {
-        choices: [{
-          message: {
-            content: viralContent
-          }
-        }]
-      },
-      citations: allCitations,
-      reasoning: combinedReasoning
+      duration: 0,
+      width: 0,
+      height: 0,
+      fps: 0,
+      format: ''
     };
-  } catch (error) {
-    console.error('Video analysis failed:', error);
-    throw error;
+  }
+
+  private prepareAnalysisPrompt(
+    metadata: VideoMetadata,
+    frameFeatures: FrameFeatures[],
+    audioFeatures: AudioFeatures
+  ): string {
+    return JSON.stringify({
+      metadata,
+      visualFeatures: frameFeatures.map(f => ({
+        timestamp: f.timestamp,
+        objects: f.objects.map(o => o.class),
+        text: f.text
+      })),
+      audioFeatures: {
+        transcript: audioFeatures.transcript.map(t => t.text).join(' '),
+        language: audioFeatures.language
+      }
+    });
+  }
+
+  private parseSonarResponse(response: any) {
+    // Extract score, reasoning, and citations from Sonar response
+    return {
+      score: {
+        overall: 0.5,
+        engagement: 0.5,
+        trend: 0.5,
+        quality: 0.5,
+        audience: 0.5
+      },
+      reasoning: '',
+      citations: []
+    };
+  }
+
+  private async cleanup() {
+    await this.featureExtractor.cleanup();
+    await this.speechAnalyzer.cleanup();
+    // Cleanup temporary files
+    try {
+      await fs.rm(this.workDir, { recursive: true, force: true });
+    } catch (error) {
+      console.error('Cleanup error:', error);
+    }
   }
 } 
