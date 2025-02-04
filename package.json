@@ -14,7 +14,6 @@
     "@ai-sdk/anthropic": "^0.0.48",
     "@ai-sdk/openai": "^0.0.54",
     "@deepgram/sdk": "^3.6.0",
-    "@tensorflow-models/coco-ssd": "^2.2.3",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-webgl": "^4.22.0",
     "@tensorflow/tfjs-node": "^4.22.0",
@@ -28,8 +27,7 @@
     "react": "^18",
     "react-dom": "^18",
     "react-markdown": "^9.0.1",
-    "replicate": "^0.32.0",
-    "tesseract.js": "^6.0.0"
+    "replicate": "^0.32.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

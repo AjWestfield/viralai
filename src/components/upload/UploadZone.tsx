@@ -100,9 +100,41 @@ export default function UploadZone({
                       Chain of Thought Analysis
                     </h3>
                     <div className="text-sm text-white/70 space-y-2">
-                      <p className="leading-relaxed whitespace-pre-wrap break-words font-mono">
-                        {streamedAnalysis.reasoning.trim()}
-                      </p>
+                      <div className="font-mono leading-relaxed whitespace-pre-wrap break-words bg-black/20 rounded-lg p-4 max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+                        {streamedAnalysis.reasoning.split('\n').map((line, i) => {
+                          // Skip empty lines
+                          if (!line.trim()) return null;
+                          
+                          // Format different types of content
+                          if (line.startsWith('Starting video') || line.startsWith('Analyzing') || 
+                              line.startsWith('Checking') || line.startsWith('Evaluating') || 
+                              line.startsWith('Assessing')) {
+                            return (
+                              <p key={i} className="text-emerald-300/80 mb-2 flex items-center gap-2">
+                                <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                </svg>
+                                {line}
+                              </p>
+                            );
+                          } else if (line.startsWith('Looking at')) {
+                            return <p key={i} className="text-blue-300/80 mb-2">{line}</p>;
+                          } else if (line.includes('Source [')) {
+                            return <p key={i} className="text-green-300/80 mb-2">{line}</p>;
+                          } else if (line.includes('calculating') || line.includes('score')) {
+                            return <p key={i} className="text-yellow-300/80 mb-2">{line}</p>;
+                          } else if (line.includes('wait') || line.includes('however') || line.includes('but')) {
+                            return <p key={i} className="text-purple-300/80 mb-2">{line}</p>;
+                          } else if (line.includes('```json')) {
+                            return null; // Skip JSON blocks
+                          } else if (line.startsWith('{') || line.startsWith('}')) {
+                            return null; // Skip JSON content
+                          } else {
+                            return <p key={i} className="mb-2">{line}</p>;
+                          }
+                        })}
+                      </div>
                     </div>
                     {streamedAnalysis.citations?.length > 0 && (
                       <div className="pt-4 border-t border-white/10">
