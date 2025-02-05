@@ -50,3 +50,27 @@ curl_output.log
 # Temporary video files
 *.mp4
 public/downloads/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+venv_tf/
+.Python
+*.so
+.Python
+.env
+.venv
+env/
+ENV/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ML models and large files
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.pb
