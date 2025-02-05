@@ -1,4 +1,4 @@
-import { perplexityClient, analyzeWithMedia } from '../sonar-config';
+import { analyzeWithMedia } from '../sonar-config';
 import { VideoMetadata } from '../types/video';
 import { enrichCitations } from '../services/media-enricher';
 
@@ -106,22 +106,11 @@ export async function analyzeVideoContent(videoData: {
     }
 
     // Analyze metadata using Perplexity AI with reasoning
-    const metadataResponse = await perplexityClient.chat.completions.create({
-      model: 'sonar-reasoning-pro',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a video analysis expert. Analyze the video metadata and provide scores and insights about its potential viral factors. Return ONLY a JSON response with this structure: {"trendScore": number 0-1, "noveltyScore": number 0-1, "qualityScore": number 0-1, "audienceScore": number 0-1, "analysis": "string", "reasoning": "string"}'
-        },
-        {
-          role: 'user',
-          content: `Analyze this video metadata and provide insights about its potential viral factors. Consider factors like duration, resolution, format, and technical quality: ${JSON.stringify(videoData.metadata)}`
-        }
-      ],
-      temperature: 0.3,
-      max_tokens: 8000,
-      response_format: { type: "text" }
-    });
+    const metadataResponse = await analyzeWithMedia(
+      `Analyze this video metadata and provide insights about its potential viral factors. Consider factors like duration, resolution, format, and technical quality. Return ONLY a JSON response with this structure: {"trendScore": number 0-1, "noveltyScore": number 0-1, "qualityScore": number 0-1, "audienceScore": number 0-1, "analysis": "string", "reasoning": "string"}
+
+      Video Metadata: ${JSON.stringify(videoData.metadata)}`
+    );
 
     console.log('Metadata Analysis Response:', JSON.stringify(metadataResponse, null, 2));
 
@@ -135,25 +124,14 @@ export async function analyzeVideoContent(videoData: {
     }
 
     // Calculate viral potential using Perplexity AI with reasoning
-    const viralResponse = await perplexityClient.chat.completions.create({
-      model: 'sonar-reasoning-pro',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a viral content prediction expert. Calculate viral potential scores based on video analysis. Use chain-of-thought reasoning to explain your predictions. Return your analysis in JSON format with the following structure: {"score": number 0-1, "reasoning": "string", "explanation": "string", "citations": ["string"]}'
-        },
-        {
-          role: 'user',
-          content: `Based on this detailed analysis and similar content examples, calculate a viral potential score and provide chain-of-thought reasoning for your prediction: ${JSON.stringify({
-            metadata: metadataContent,
-            similarContent: similarContentResponse.choices[0].message.content
-          })}`
-        }
-      ],
-      temperature: 0.5,
-      max_tokens: 8000,
-      response_format: { type: "text" }
-    });
+    const viralResponse = await analyzeWithMedia(
+      `Based on this detailed analysis and similar content examples, calculate a viral potential score and provide chain-of-thought reasoning for your prediction. Return your analysis in JSON format with the following structure: {"score": number 0-1, "reasoning": "string", "explanation": "string", "citations": ["string"]}
+
+      Analysis Data: ${JSON.stringify({
+        metadata: metadataContent,
+        similarContent: similarContentResponse.choices[0].message.content
+      })}`
+    );
 
     console.log('Viral Analysis Response:', JSON.stringify(viralResponse, null, 2));
 
