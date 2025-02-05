@@ -41,3 +41,12 @@ uploads/
 frames/
 coverage/
 *.log
+
+# Test files
+test.mp4
+test_cancel.sh
+curl_output.log
+
+# Temporary video files
+*.mp4
+public/downloads/

@@ -5,24 +5,120 @@ import DashboardLayout from '@/components/layout/DashboardLayout';
 import GlassPanel from '@/components/layout/GlassPanel';
 import HeroPanel from '@/components/layout/HeroPanel';
 import UploadZone from '@/components/upload/UploadZone';
+import VideoPreview from '@/components/upload/VideoPreview';
 import { useVideoAnalysis } from '@/lib/hooks/useVideoAnalysis';
 import { getScoreCategory, getScoreColor } from '@/lib/analysis/viralScore';
 
 export default function Home() {
-  const { analysis, status, streamedAnalysis, analyzeVideo } = useVideoAnalysis();
+  const { 
+    analysis, 
+    status, 
+    streamedAnalysis, 
+    downloadedVideoFile,
+    analyzeVideo, 
+    analyzeVideoUrl, 
+    cancelAnalysis,
+    setStatus 
+  } = useVideoAnalysis();
   const [error, setError] = useState<string | null>(null);
+  const isAnalyzing = status.stage !== 'complete' && status.progress > 0;
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const handleFileUpload = async (file: File) => {
     try {
       setError(null);
+      setSelectedFile(file);
       await analyzeVideo(file);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : 'Failed to analyze video';
       setError(errorMessage);
       console.error('Video analysis error:', err);
+    }
+  };
+
+  const handleUrlSubmit = async (url: string) => {
+    try {
+      setError(null);
+      setSelectedFile(null);
+      await analyzeVideoUrl(url);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Failed to analyze video';
+      setError(errorMessage);
+      console.error('Video URL analysis error:', err);
+    }
+  };
+
+  const handleCancel = () => {
+    cancelAnalysis();
+    setSelectedFile(null);
+  };
+
+  // Helper function to render analysis steps
+  const renderAnalysisStep = (step: string) => {
+    const isCompleted = step.endsWith('✓');
+    const cleanStep = step.replace(' ✓', '');
+    const isInProgress = !isCompleted && streamedAnalysis?.reasoning.split('\n').slice(-1)[0]?.includes(cleanStep);
+
+    return (
+      <div 
+        key={step}
+        className={`
+          flex items-center gap-3 font-mono text-sm transition-all duration-300
+          ${isCompleted ? 'text-emerald-400' : isInProgress ? 'text-white' : 'text-white/60'}
+        `}
+      >
+        {/* Left side indicator */}
+        <div className="w-5 h-5 relative flex-shrink-0">
+          {isCompleted ? (
+            // Checkmark for completed steps
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          ) : isInProgress ? (
+            // Loading spinner for in-progress step
+            <div className="w-5 h-5 flex items-center justify-center">
+              <div className="w-5 h-5 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+            </div>
+          ) : (
+            // Empty state for pending steps
+            <div className="w-5 h-5 rounded-full border-2 border-white/10" />
+          )}
+        </div>
+
+        {/* Step text with loading indicator */}
+        <div className="flex-1 flex items-center gap-2">
+          {isInProgress ? (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  {/* Text with glow effect */}
+                  <span className="relative inline-block animate-pulse">
+                    {cleanStep}
+                    <span className="absolute inset-0 bg-emerald-400/5 blur-sm rounded" />
+                  </span>
+                  {/* Animated underline */}
+                  <div className="absolute -bottom-0.5 left-0 right-0 h-px bg-gradient-to-r from-emerald-400/0 via-emerald-400 to-emerald-400/0">
+                    <div className="absolute inset-0 animate-shimmer" />
+                  </div>
+                </div>
+              </div>
+              <span className="text-xs text-emerald-400/80 animate-pulse">
+                Processing...
+              </span>
+            </>
+          ) : (
+            <span>{cleanStep}</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // Add this keyframe animation to your globals.css or tailwind.config.js
+  const shimmerAnimation = {
+    '@keyframes shimmer': {
+      '0%': { transform: 'translateX(-100%)' },
+      '100%': { transform: 'translateX(100%)' }
     }
   };
 
@@ -38,7 +134,9 @@ export default function Home() {
             <h2 className="text-xl font-bold text-white">Upload Video</h2>
             <UploadZone 
               onFileSelect={handleFileUpload}
+              onUrlSubmit={handleUrlSubmit}
               status={status}
+              setStatus={setStatus}
               streamedAnalysis={streamedAnalysis}
               disabled={status.stage !== 'complete' && status.stage !== 'uploading'}
             />
@@ -52,6 +150,7 @@ export default function Home() {
                     <li>Is in MP4, MOV, or AVI format</li>
                     <li>Is less than 100MB in size</li>
                     <li>Is not corrupted or encrypted</li>
+                    <li>Has a valid and accessible URL (if using URL input)</li>
                   </ul>
                 </div>
               </div>
@@ -60,69 +159,112 @@ export default function Home() {
         </GlassPanel>
 
         <GlassPanel>
-          <div className="space-y-6">
+          <div className="space-y-4">
             <h2 className="text-xl font-bold text-white">Analysis Results</h2>
             {analysis ? (
               <>
-                <div className="space-y-4">
-                  <div className="flex justify-between items-center">
-                    <span className="text-white/60">Overall Score</span>
-                    <span className="text-4xl font-bold text-white">
-                      {Math.round(analysis.result.score * 100)}%
-                    </span>
+                {/* Overall Score */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-white/60">Overall Score</div>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-bold text-white">
+                        {Math.round(analysis.result.score * 100)}%
+                      </span>
+                      <div className="text-lg text-white/80 p-3 rounded-lg bg-white/5">
+                        Viral Potential: High
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-lg text-white/80 p-3 rounded-lg bg-[rgba(110,231,183,0.05)] border border-[#6EE7B7]/10">
-                    {getScoreCategory(analysis.result.score)}
+                </div>
+
+                {/* Score Breakdown */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/60">engagement cues</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-2 rounded-full bg-white/10">
+                        <div 
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${analysis.result.engagementCues * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-white/80 w-12 text-right">
+                        {Math.round(analysis.result.engagementCues * 100)}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="space-y-4 mt-6">
-                    {Object.entries(analysis.result).map(([key, value]) => {
-                      if (key === 'score') return null;
-                      return (
-                        <div key={key} className="flex justify-between items-center">
-                          <span className="text-white/60">
-                            {key.split(/(?=[A-Z])/).join(' ').toLowerCase()}
-                          </span>
-                          <div className="flex items-center gap-4">
-                            <div className="w-32 bg-white/10 rounded-full h-1.5 overflow-hidden">
-                              <div 
-                                className="h-full bg-gradient-to-r from-[#6EE7B7] to-[rgba(88,101,242,1)] rounded-full"
-                                style={{ width: `${value * 100}%` }}
-                              />
-                            </div>
-                            <span className="text-white/80 w-12 text-right">
-                              {Math.round(value * 100)}%
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    })}
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/60">trend alignment</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-2 rounded-full bg-white/10">
+                        <div 
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${analysis.result.trendAlignment * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-white/80 w-12 text-right">
+                        {Math.round(analysis.result.trendAlignment * 100)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/60">content novelty</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-2 rounded-full bg-white/10">
+                        <div 
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${analysis.result.contentNovelty * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-white/80 w-12 text-right">
+                        {Math.round(analysis.result.contentNovelty * 100)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/60">production quality</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-2 rounded-full bg-white/10">
+                        <div 
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${analysis.result.productionQuality * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-white/80 w-12 text-right">
+                        {Math.round(analysis.result.productionQuality * 100)}%
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-white/60">audience match</span>
+                    <div className="flex items-center gap-2">
+                      <div className="w-32 h-2 rounded-full bg-white/10">
+                        <div 
+                          className="h-full rounded-full bg-emerald-400"
+                          style={{ width: `${analysis.result.audienceMatch * 100}%` }}
+                        />
+                      </div>
+                      <span className="text-white/80 w-12 text-right">
+                        {Math.round(analysis.result.audienceMatch * 100)}%
+                      </span>
+                    </div>
                   </div>
                 </div>
 
                 {/* Analysis Reasoning */}
-                {analysis.reasoning && (
-                  <div className="border-t border-white/10 pt-4">
-                    <h3 className="text-lg font-semibold text-white mb-3">Analysis Reasoning</h3>
-                    <div className="text-white/80 text-sm space-y-2">
-                      <p>{analysis.reasoning}</p>
-                    </div>
+                <div className="border-t border-white/10 pt-4">
+                  <h3 className="text-lg font-semibold text-white mb-3">Analysis Reasoning</h3>
+                  <div className="text-white/80 text-sm whitespace-pre-wrap">
+                    {analysis.reasoning}
                   </div>
-                )}
+                </div>
 
-                {/* Citations */}
-                {analysis.citations && analysis.citations.length > 0 && (
-                  <div className="border-t border-white/10 pt-4">
-                    <h3 className="text-lg font-semibold text-white mb-3">Analysis Sources</h3>
-                    <div className="space-y-2">
-                      {analysis.citations.map((citation, index) => (
-                        <div key={index} className="text-sm text-white/60 bg-white/5 p-2 rounded">
-                          {citation}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
+                {/* Video Details */}
                 <div className="border-t border-white/10 pt-4">
                   <h3 className="text-lg font-semibold text-white mb-3">Video Details</h3>
                   <div className="grid grid-cols-2 gap-3">
@@ -181,6 +323,98 @@ export default function Home() {
           </div>
         </GlassPanel>
       </div>
+
+      {/* Video Preview Section */}
+      {(selectedFile || downloadedVideoFile) && isAnalyzing && (
+        <div className="relative rounded-lg overflow-hidden bg-black/20">
+          <VideoPreview 
+            videoFile={selectedFile || downloadedVideoFile}
+            isAnalyzing={isAnalyzing}
+          />
+        </div>
+      )}
+
+      {/* Focus View Overlay */}
+      {isAnalyzing && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="max-w-4xl w-full mx-4">
+            <div className="bg-[#0A1628] rounded-2xl p-6 space-y-6">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-full bg-[#1a2e44] flex items-center justify-center">
+                    <svg 
+                      className="w-4 h-4 text-[#6EE7B7]"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path 
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"
+                      />
+                    </svg>
+                  </div>
+                  <h2 className="text-xl font-bold text-white">Analyzing Video</h2>
+                </div>
+                <button
+                  onClick={handleCancel}
+                  className="text-white/60 hover:text-white transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+
+              {/* Video Preview */}
+              <div className="relative rounded-lg overflow-hidden bg-black/20">
+                <VideoPreview 
+                  videoFile={selectedFile || downloadedVideoFile}
+                  isAnalyzing={true}
+                />
+              </div>
+
+              {/* Progress and Analysis */}
+              <div className="space-y-4">
+                {/* Progress Bar */}
+                <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-[#6EE7B7] to-[rgba(88,101,242,1)] rounded-full transition-all duration-300"
+                    style={{ width: `${status.progress}%` }}
+                  />
+                </div>
+                
+                {/* Status Text */}
+                <div className="space-y-2">
+                  <p className="text-white/80 font-medium">
+                    {status.currentStep} ({status.progress}%)
+                  </p>
+                </div>
+
+                {/* Chain of Thought Analysis */}
+                {streamedAnalysis && streamedAnalysis.reasoning && (
+                  <div className="mt-6 text-left">
+                    <div className="space-y-4 bg-white/5 rounded-lg p-4">
+                      <h3 className="text-white/80 font-medium flex items-center gap-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        Chain of Thought Analysis
+                      </h3>
+                      <div className="space-y-2">
+                        {streamedAnalysis.reasoning.split('\n')
+                          .filter(line => line.trim() !== '')
+                          .map((line, i) => renderAnalysisStep(line))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardLayout>
   );
 }

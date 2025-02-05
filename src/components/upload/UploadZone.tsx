@@ -1,9 +1,13 @@
-import { ChangeEvent } from 'react';
+import { ChangeEvent, DragEvent, useState } from 'react';
 import { ProcessingStatus } from '@/lib/types/video';
+import VideoPreview from './VideoPreview';
+import { parseVideoUrl, getPlatformIcon } from '@/lib/utils/videoUrlParser';
 
 interface UploadZoneProps {
-  onFileSelect: (e: ChangeEvent<HTMLInputElement>) => void;
+  onFileSelect: (file: File) => void;
+  onUrlSubmit: (url: string) => void;
   status: ProcessingStatus;
+  setStatus: (status: ProcessingStatus) => void;
   streamedAnalysis?: {
     reasoning: string;
     citations: { url: string; title: string; }[];
@@ -11,13 +15,189 @@ interface UploadZoneProps {
   disabled?: boolean;
 }
 
+interface UrlStatus {
+  isValid: boolean;
+  message: string;
+  state: 'validating' | 'valid' | 'downloading' | 'ready' | 'error';
+}
+
 export default function UploadZone({ 
   onFileSelect, 
+  onUrlSubmit,
   status, 
+  setStatus,
   streamedAnalysis,
   disabled 
 }: UploadZoneProps) {
+  const [isDragging, setIsDragging] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState('');
+  const [downloadedVideoPath, setDownloadedVideoPath] = useState<string | null>(null);
+  const [inputMode, setInputMode] = useState<'file' | 'url'>('file');
+  const [urlPreview, setUrlPreview] = useState<{
+    platform: string;
+    thumbnailUrl: string | null;
+    embedUrl: string | null;
+  } | null>(null);
+  const [urlStatus, setUrlStatus] = useState<UrlStatus>({
+    isValid: false,
+    message: '',
+    state: 'validating'
+  });
   const isProcessing = status.stage !== 'complete' && status.progress > 0;
+  const isAnalyzing = status.stage !== 'complete' && status.progress === 0;
+  const [disabledForm, setDisabledForm] = useState(false);
+
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!disabled && !isProcessing) {
+      setIsDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (disabled || isProcessing) return;
+
+    const files = Array.from(e.dataTransfer.files);
+    const videoFile = files.find(file => file.type.startsWith('video/'));
+    
+    if (videoFile) {
+      setSelectedFile(videoFile);
+      // Reset status to allow new analysis
+      setStatus({ stage: 'uploading', progress: 0, currentStep: '' });
+    }
+  };
+
+  const handleFileChange = (e: ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      setSelectedFile(e.target.files[0]);
+      // Reset status to allow new analysis
+      setStatus({ stage: 'uploading', progress: 0, currentStep: '' });
+    }
+  };
+
+  const handleUrlChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const url = e.target.value;
+    setVideoUrl(url);
+    setDownloadedVideoPath(null);
+
+    if (url.trim()) {
+      // Immediate validation feedback
+      setUrlStatus({
+        isValid: false,
+        message: 'Validating URL...',
+        state: 'validating'
+      });
+
+      const videoInfo = parseVideoUrl(url.trim());
+      
+      if (videoInfo.platform !== 'unknown') {
+        // Show URL accepted status
+        setUrlStatus({
+          isValid: true,
+          message: 'URL Accepted',
+          state: 'valid'
+        });
+
+        setUrlPreview({
+          platform: videoInfo.platform,
+          thumbnailUrl: videoInfo.thumbnailUrl,
+          embedUrl: videoInfo.embedUrl
+        });
+
+        // Update to downloading state
+        setUrlStatus({
+          isValid: true,
+          message: 'Download In Progress',
+          state: 'downloading'
+        });
+
+        // Start download process
+        try {
+          const response = await fetch('/api/video/download-url', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ url: url.trim() }),
+          });
+
+          const downloadResult = await response.json();
+
+          if (!downloadResult.success) {
+            throw new Error(downloadResult.error || 'Failed to download video');
+          }
+
+          const videoPath = `/uploads/${downloadResult.videoPath.split('/').pop()}`;
+          setDownloadedVideoPath(videoPath);
+          
+          // Update status to ready
+          setUrlStatus({
+            isValid: true,
+            message: 'Ready to analyze',
+            state: 'ready'
+          });
+
+        } catch (error) {
+          console.error('Error downloading video:', error);
+          setDownloadedVideoPath(null);
+          setUrlStatus({
+            isValid: false,
+            message: 'Error downloading video',
+            state: 'error'
+          });
+        }
+      } else {
+        setUrlPreview(null);
+        setUrlStatus({
+          isValid: false,
+          message: 'Invalid or unsupported video URL',
+          state: 'error'
+        });
+      }
+    } else {
+      setUrlPreview(null);
+      setUrlStatus({
+        isValid: false,
+        message: '',
+        state: 'validating'
+      });
+    }
+  };
+
+  const handleUrlSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (videoUrl.trim()) {
+      setDisabledForm(true);
+      
+      try {
+        // Reset status and streamedAnalysis before starting new analysis
+        if (status.stage === 'complete') {
+          setStatus({ stage: 'uploading', progress: 0, currentStep: '' });
+        }
+        
+        // Start analysis using the already downloaded video
+        await onUrlSubmit(videoUrl.trim());
+        // Clear the URL field after successful analysis
+        setVideoUrl('');
+        setDisabledForm(false);
+      } catch (error) {
+        console.error('Error analyzing video:', error);
+        setDisabledForm(false);
+      }
+    }
+  };
 
   // Helper function to get icon based on URL type
   const getCitationIcon = (url: string) => {
@@ -48,175 +228,306 @@ export default function UploadZone({
     }
   };
 
-  return (
-    <div 
-      className={`
-        relative p-12 rounded-2xl
-        border-2 border-dashed border-white/10
-        ${!disabled ? 'hover:border-accent/50' : ''}
-        transition-all duration-300
-        bg-[rgba(0,0,0,0.2)] backdrop-blur-lg
-        ${disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
-      `}
-    >
-      <div className="relative z-10">
-        <input
-          type="file"
-          accept="video/*"
-          onChange={onFileSelect}
-          className="hidden"
-          id="video-upload"
-          disabled={disabled}
-        />
-        <label 
-          htmlFor="video-upload"
-          className="block w-full h-full text-center"
-        >
-          {isProcessing ? (
-            <div className="space-y-4">
-              {/* Progress Bar */}
-              <div className="w-full h-2 bg-white/10 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-[#6EE7B7] to-[rgba(88,101,242,1)] rounded-full transition-all duration-300"
-                  style={{ width: `${status.progress}%` }}
-                />
-              </div>
-              
-              {/* Status Text */}
-              <div className="space-y-2">
-                <p className="text-white/80 font-medium">
-                  {status.currentStep} ({status.progress}%)
-                </p>
-              </div>
+  const getUrlStatusIndicator = () => {
+    switch (urlStatus.state) {
+      case 'validating':
+        return null;
+      case 'valid':
+        return (
+          <div className="flex items-center gap-2 text-emerald-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span className="text-sm">{urlStatus.message}</span>
+          </div>
+        );
+      case 'downloading':
+        return (
+          <div className="flex items-center gap-2 text-emerald-400/80">
+            <div className="w-4 h-4 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+            <span className="text-sm">{urlStatus.message}</span>
+          </div>
+        );
+      case 'ready':
+        return (
+          <div className="flex items-center gap-2 text-emerald-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+            <span className="text-sm">{urlStatus.message}</span>
+          </div>
+        );
+      case 'error':
+        return (
+          <div className="flex items-center gap-2 text-red-400">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+            <span className="text-sm">{urlStatus.message}</span>
+          </div>
+        );
+    }
+  };
 
-              {/* Streamed Analysis */}
-              {streamedAnalysis && streamedAnalysis.reasoning && (
-                <div className="mt-6 text-left">
-                  <div className="space-y-4 bg-white/5 rounded-lg p-4">
-                    <h3 className="text-white/80 font-medium flex items-center gap-2">
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                      </svg>
-                      Chain of Thought Analysis
-                    </h3>
-                    <div className="text-sm text-white/70 space-y-2">
-                      <div className="font-mono leading-relaxed whitespace-pre-wrap break-words bg-black/20 rounded-lg p-4 max-h-[500px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                        {streamedAnalysis.reasoning.split('\n').map((line, i) => {
-                          // Skip empty lines
-                          if (!line.trim()) return null;
-                          
-                          // Format different types of content
-                          if (line.startsWith('Starting video') || line.startsWith('Analyzing') || 
-                              line.startsWith('Checking') || line.startsWith('Evaluating') || 
-                              line.startsWith('Assessing') || line.startsWith('Comparing') ||
-                              line.startsWith('Calculating') || line.startsWith('Finalizing')) {
-                            const isCompleted = line.endsWith('✓');
-                            const cleanLine = line.replace(' ✓', '');
-                            return (
-                              <p key={i} className={`mb-2 flex items-center gap-2 ${isCompleted ? 'text-emerald-300/80' : 'text-white/80'}`}>
-                                {isCompleted ? (
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                                  </svg>
-                                ) : (
-                                  <svg className="w-4 h-4 animate-spin" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                                  </svg>
-                                )}
-                                {cleanLine}
-                              </p>
-                            );
-                          } else if (line.startsWith('Looking at')) {
-                            return <p key={i} className="text-blue-300/80 mb-2">{line}</p>;
-                          } else if (line.includes('Source [')) {
-                            return <p key={i} className="text-green-300/80 mb-2">{line}</p>;
-                          } else if (line.includes('calculating') || line.includes('score')) {
-                            return <p key={i} className="text-yellow-300/80 mb-2">{line}</p>;
-                          } else if (line.includes('wait') || line.includes('however') || line.includes('but')) {
-                            return <p key={i} className="text-purple-300/80 mb-2">{line}</p>;
-                          } else if (line.includes('```json')) {
-                            return null; // Skip JSON blocks
-                          } else if (line.startsWith('{') || line.startsWith('}')) {
-                            return null; // Skip JSON content
-                          } else {
-                            return <p key={i} className="mb-2">{line}</p>;
-                          }
-                        })}
-                      </div>
+  return (
+    <div className="relative">
+      {/* Input mode toggle */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => {
+            setInputMode('file');
+            setUrlPreview(null);
+            setVideoUrl('');
+          }}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            inputMode === 'file'
+              ? 'bg-emerald-400/10 text-emerald-400'
+              : 'bg-white/5 text-white/60 hover:bg-white/10'
+          }`}
+          disabled={disabled}
+        >
+          Upload File
+        </button>
+        <button
+          onClick={() => setInputMode('url')}
+          className={`px-4 py-2 rounded-lg transition-colors ${
+            inputMode === 'url'
+              ? 'bg-emerald-400/10 text-emerald-400'
+              : 'bg-white/5 text-white/60 hover:bg-white/10'
+          }`}
+          disabled={disabled}
+        >
+          Enter URL
+        </button>
+      </div>
+
+      {inputMode === 'file' ? (
+        <div className="space-y-6">
+          <div 
+            className={`
+              relative p-12 rounded-2xl
+              border-2 border-dashed
+              ${isDragging ? 'border-accent' : 'border-white/10'}
+              ${!disabled ? 'hover:border-accent/50' : ''}
+              transition-all duration-300
+              bg-[rgba(0,0,0,0.2)] backdrop-blur-lg
+              ${disabled ? 'pointer-events-none' : 'cursor-pointer'}
+            `}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            <div className="relative z-10">
+              <input
+                type="file"
+                accept="video/*"
+                onChange={handleFileChange}
+                className="hidden"
+                id="video-upload"
+                disabled={disabled}
+              />
+              <label 
+                htmlFor="video-upload"
+                className="block w-full h-full text-center"
+              >
+                {selectedFile && status.stage !== 'complete' ? (
+                  <div className="space-y-4">
+                    {/* Video Preview */}
+                    <div className="max-w-[500px] mx-auto relative">
+                      <VideoPreview 
+                        videoFile={selectedFile} 
+                        isAnalyzing={isProcessing} 
+                        showPreview={true}
+                      />
+                      {/* Remove Button */}
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setSelectedFile(null);
+                          setStatus({ stage: 'uploading', progress: 0, currentStep: '' });
+                        }}
+                        className="absolute top-2 right-2 p-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-500 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
                     </div>
-                    {streamedAnalysis.citations?.length > 0 && (
-                      <div className="pt-4 border-t border-white/10">
-                        <h4 className="text-sm font-medium text-white/70 mb-3 flex items-center gap-2">
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-                          </svg>
-                          Analysis Sources ({streamedAnalysis.citations.length})
-                        </h4>
-                        <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                          {streamedAnalysis.citations.map((citation, i) => (
-                            <a 
-                              key={i}
-                              href={citation.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="flex items-center gap-3 text-xs text-white/60 hover:text-white/80 transition-colors p-3 rounded-lg bg-white/5 hover:bg-white/10 group"
-                            >
-                              <span className="flex-shrink-0">
-                                {getCitationIcon(citation.url)}
-                              </span>
-                              <div className="flex-1 min-w-0">
-                                <div className="font-medium mb-0.5 truncate">
-                                  {citation.title}
-                                </div>
-                                <div className="text-white/40 truncate group-hover:text-white/60">
-                                  {citation.url}
-                                </div>
-                              </div>
-                              <svg 
-                                className="w-4 h-4 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" 
-                                fill="none" 
-                                stroke="currentColor" 
-                                viewBox="0 0 24 24"
-                              >
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                              </svg>
-                            </a>
-                          ))}
-                        </div>
+
+                    {/* Analyze Button - Show when not processing */}
+                    {!isProcessing && (
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          if (selectedFile) {
+                            onFileSelect(selectedFile);
+                          }
+                        }}
+                        disabled={!selectedFile || disabled}
+                        className={`
+                          w-full px-4 py-3 rounded-lg font-medium transition-colors
+                          ${!selectedFile || disabled
+                            ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                            : 'bg-emerald-400/10 text-emerald-400 hover:bg-emerald-400/20'
+                          }
+                        `}
+                      >
+                        Analyze Video
+                      </button>
+                    )}
+
+                    {/* Processing State */}
+                    {isProcessing && (
+                      <div className="flex items-center justify-center gap-2 text-emerald-400">
+                        <div className="w-4 h-4 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+                        <span>Analyzing...</span>
                       </div>
                     )}
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="text-center">
+                    <div className="mx-auto w-12 h-12 mb-4 rounded-full bg-[#1a2e44] flex items-center justify-center">
+                      <svg 
+                        className="w-6 h-6 text-[#6EE7B7]"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path 
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                        />
+                      </svg>
+                    </div>
+                    <p className="text-white/60">
+                      Drag and drop your video here, or click to select
+                    </p>
+                    <p className="mt-2 text-sm text-white/40">
+                      Supported formats: MP4, MOV, AVI (max 100MB)
+                    </p>
+                  </div>
+                )}
+              </label>
             </div>
-          ) : (
-            <div className="text-center">
-              <div className="mx-auto w-12 h-12 mb-4 rounded-full bg-[#1a2e44] flex items-center justify-center">
-                <svg 
-                  className="w-6 h-6 text-[#6EE7B7]"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path 
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                  />
-                </svg>
+          </div>
+
+          {/* Show analyzed video below when analysis is complete */}
+          {status.stage === 'complete' && selectedFile && (
+            <div className="mt-6">
+              <h3 className="text-lg font-medium text-white/80 mb-3">Analyzed Video</h3>
+              <div className="max-w-[500px] mx-auto relative">
+                <VideoPreview 
+                  videoFile={selectedFile} 
+                  isAnalyzing={false}
+                  showPreview={true}
+                />
               </div>
-              <p className="text-white/60">
-                Drag and drop your video here, or click to select
-              </p>
-              <p className="mt-2 text-sm text-white/40">
-                Supported formats: MP4, MOV, AVI (max 100MB)
-              </p>
             </div>
           )}
-        </label>
-      </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <form onSubmit={handleUrlSubmit} className="space-y-4">
+            <div className="relative">
+              <div className="flex items-center gap-2 p-2 rounded-lg bg-white/5 border border-white/10 focus-within:border-emerald-400/50">
+                {urlPreview && (
+                  <div 
+                    className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-white/60"
+                    dangerouslySetInnerHTML={{ __html: getPlatformIcon(urlPreview.platform) }}
+                  />
+                )}
+                <input
+                  type="url"
+                  value={videoUrl}
+                  onChange={handleUrlChange}
+                  placeholder="Enter video URL (e.g., TikTok, Instagram, YouTube)"
+                  className="flex-1 bg-transparent text-white placeholder-white/40 focus:outline-none"
+                  disabled={disabled || disabledForm}
+                />
+                {videoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVideoUrl('');
+                      setUrlPreview(null);
+                      setUrlStatus({
+                        isValid: false,
+                        message: '',
+                        state: 'validating'
+                      });
+                    }}
+                    className="text-white/40 hover:text-white/60"
+                    disabled={disabled || disabledForm}
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* URL Status Indicator */}
+            {videoUrl && urlStatus.message && (
+              <div className="mt-2">
+                {getUrlStatusIndicator()}
+              </div>
+            )}
+
+            {/* Video Preview */}
+            {downloadedVideoPath && urlStatus.state === 'ready' && (
+              <div className="mt-6">
+                <div className="max-w-[500px] mx-auto">
+                  <VideoPreview 
+                    videoUrl={downloadedVideoPath}
+                    isAnalyzing={isAnalyzing} 
+                    showPreview={status.stage === 'complete' || (!isAnalyzing && !status.stage)}
+                  />
+                </div>
+              </div>
+            )}
+
+            <button
+              type="submit"
+              disabled={!urlStatus.isValid || disabled || disabledForm || !downloadedVideoPath}
+              className={`
+                w-full px-4 py-3 rounded-lg font-medium transition-colors
+                ${!urlStatus.isValid || disabled || disabledForm || !downloadedVideoPath
+                  ? 'bg-white/5 text-white/40 cursor-not-allowed'
+                  : 'bg-emerald-400/10 text-emerald-400 hover:bg-emerald-400/20'
+                }
+              `}
+            >
+              {status.stage === 'analyzing' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin" />
+                  <span>Analyzing...</span>
+                </div>
+              ) : (
+                'Analyze Video'
+              )}
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Processing indicator */}
+      {status.stage !== 'complete' && status.progress > 0 && (
+        <div className="mt-4 space-y-2">
+          <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-emerald-400 transition-all duration-300"
+              style={{ width: `${status.progress}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-white/60">{status.currentStep}</span>
+            <span className="text-white/40">{status.progress}%</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 } 
